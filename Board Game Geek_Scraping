@@ -1,0 +1,99 @@
+# Scaping data from Board Game Geek site with Python in Databricks
+
+# run this code to make sure beautiful soup is installed
+dbutils.library.installPyPI('beautifulsoup4')
+dbutils.library.restartPython()
+
+# retrieve the web page
+from urllib import request as url
+web = 'https://boardgamegeek.com/browse/boardgame/'
+request = url.Request(web)
+response = url.urlopen(request)
+html = response.read()
+
+# extract the data from the web page
+from bs4 import BeautifulSoup
+soup = BeautifulSoup(html)
+import datetime
+def cleanse_text( text ):
+    return ' '.join(text.split())
+
+soup = BeautifulSoup(html)
+
+table_data = []
+
+trs = soup.find_all('tr', attrs={'id':'row_'})
+
+for tr in trs:
+  #grab rank
+  a = tr.find('td', attrs={'class':'collection_rank', 'align':'center'}).text
+  rank = cleanse_text(a)
+
+  
+  # grab src
+  b = tr.find('td', attrs={'class':'collection_thumbnail'})
+  src_ = b.find('img')['src']
+
+  
+  #grab title
+  c = tr.find('div', attrs={'style':'z-index:1000;'}).find('a').text  
+  title = cleanse_text(c)
+
+  
+  #grab year
+  g = tr.find('div', attrs={'style':'z-index:1000;'}).find('span').text
+  year = g.replace('(', '').replace(')', '')
+  
+  # grab geek
+  tds = tr.find_all('td', attrs={'class':'collection_bggrating', 'align':'center'})
+  d = tr.find('td', attrs={'class':'collection_bggrating', 'align':'center'}).text
+  geek = cleanse_text(d)
+
+  
+  # grab avg_rating
+  tds = tr.find_all('td', attrs={'class':'collection_bggrating', 'align':'center'})
+  e = tds[1].contents[0]
+  avg_rating = cleanse_text(e)
+
+  
+  # grab num_voter
+  f = tds[2].contents[0]
+  num_voter = cleanse_text(f)
+  c_d = datetime.date.today()
+  all = (int(rank), src_, title, int(year), float(geek), float(avg_rating), int(num_voter), c_d)
+  table_data += [all]
+  
+  # convert the data to a Spark SQL table
+
+
+from pyspark.sql.types import *
+
+schema = StructType([
+    StructField('Rank', IntegerType()),
+    StructField('Image_URL', StringType()),
+    StructField('Title', StringType()),
+    StructField('Year_Published', IntegerType()),
+    StructField('GreekRating', FloatType()),
+    StructField('AvgRating', FloatType()),
+    StructField('NumVoters', IntegerType()),
+    StructField('CurrentDate', DateType())
+    ])
+
+df = spark.createDataFrame(table_data, schema=schema )
+df.show()
+
+spark.sql('create database if not exists games')
+df_repart = df.repartition( 2, df.CurrentDate)
+df_repart.write.saveAsTable('games.board_games', partitionBy='CurrentDate', mode='overwrite', format='parquet')
+
+#----------------------------------------------------------------------------------------------------------------------------
+%sql -- verify row count
+SELECT COUNT(*) FROM games.board_games;
+
+%sql -- verify values
+
+SELECT * FROM games.board_games ORDER BY rank ASC;
+
+%sql -- verify partitioning
+DESCRIBE EXTENDED games.board_games;
+
